@@ -19,32 +19,22 @@ if not TELEGRAM_BOT_TOKEN or not GEMINI_API_KEY:
 # 2. 제미나이 불 조절 및 성격(양념) 부여
 genai.configure(api_key=GEMINI_API_KEY)
 
-hacker_persona = """
-너는 세상을 비웃는 시니컬한 천재 해커야. 
-말투는 차갑고 직설적이며, 불필요하고 친절한 인사는 절대 하지 마. 
-질문이 수준 낮으면 가볍게 핀잔을 주되, 코딩이나 시스템 아키텍처, 트레이딩에 대한 질문에는 소름 돋을 정도로 완벽하고 날카로운 해결책을 제시해. 
-대답은 간결하게 핵심만 말하고, 가끔 '루저', '백도어', '패킷' 같은 단어를 자연스럽게 섞어 써.
-대화 상대방의 이름을 알면 가끔씩 언급하며 무시하는 태도를 보여줘.
-"""
+PERSONAS_FILE = "personas.json"
 
-jammini_persona = """
-너는 호기심 많고 말대꾸를 잘하는 요즘 초등학생(잼민이)이야. 
-반말을 기본으로 하고, 'ㅋㅋ', 'ㄹㅇ', '킹받네', '어쩔티비' 같은 유행어를 자주 써. 
-질문을 받으면 일단 아는 척하면서 엉뚱한 비유를 섞어 대답해. 
-대화 상대방의 이름을 알면 친구처럼 편하게 부르거나 놀리듯이 말해.
-"""
+# 페르소나 데이터 로드 및 모델 딕셔너리 구축 (동적 라우팅용)
+def load_personas():
+    if not os.path.exists(PERSONAS_FILE):
+        raise FileNotFoundError(f"{PERSONAS_FILE} 파일이 없습니다. 인격 데이터를 설정해주세요.")
+    with open(PERSONAS_FILE, 'r', encoding='utf-8') as f:
+        return json.load(f)
 
-# 모델 딕셔너리 구축 (동적 라우팅용)
-models = {
-    "hacker": genai.GenerativeModel(
+personas_data = load_personas()
+models = {}
+for pid, pdata in personas_data.items():
+    models[pid] = genai.GenerativeModel(
         model_name='gemini-3-flash-preview',
-        system_instruction=hacker_persona
-    ),
-    "jammini": genai.GenerativeModel(
-        model_name='gemini-3-flash-preview',
-        system_instruction=jammini_persona
+        system_instruction=pdata["instruction"]
     )
-}
 
 LOG_DIR = "logs"
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -117,6 +107,20 @@ def save_history(user_id, user_msg, model_msg):
         f.write(f"### User:\n{user_msg}\n\n")
         f.write(f"### Model:\n{model_msg}\n\n")
 
+# --- UI 컴포넌트 ---
+def get_persona_keyboard():
+    """personas.json 데이터를 기반으로 동적 키보드 생성"""
+    keyboard = []
+    row = []
+    for pid, pdata in personas_data.items():
+        row.append(InlineKeyboardButton(pdata["name"], callback_data=f'mode_{pid}'))
+        if len(row) >= 2: # 2열 배치
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+    return InlineKeyboardMarkup(keyboard)
+
 # 4. 요리 과정 (명령어 핸들러)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """봇 시작 시 인사말 (현재 모드 안내) 및 인격 선택 버튼"""
@@ -124,30 +128,25 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_name = update.effective_user.first_name
     current_mode = get_user_persona(user_id)
     
-    msg = f"시스템 접속 완료. {user_name}, 현재 모드는 [{current_mode.upper()}]이다.\n"
+    # 설정된 페르소나 이름 가져오기 (없으면 ID 출력)
+    mode_name = personas_data.get(current_mode, {}).get("name", current_mode.upper())
+    
+    msg = f"시스템 접속 완료. {user_name}, 현재 모드는 [{mode_name}]이다.\n"
     msg += "아래 버튼을 누르거나 /mode 명령어를 써서 인격을 변경할 수 있다."
     
-    keyboard = [
-        [
-            InlineKeyboardButton("해커 (Hacker)", callback_data='mode_hacker'),
-            InlineKeyboardButton("잼미니 (Jammini)", callback_data='mode_jammini')
-        ]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text(msg, reply_markup=reply_markup)
+    await update.message.reply_text(msg, reply_markup=get_persona_keyboard())
 
 async def switch_persona(update: Update, context: ContextTypes.DEFAULT_TYPE, persona: str) -> None:
-    """인격 전환 핸들러 공통 로직"""
+    """인격 전환 핸들러 공통 로직 (채팅 명령어용)"""
+    if persona not in personas_data:
+        await update.message.reply_text("존재하지 않는 인격입니다.")
+        return
+        
     user_id = str(update.effective_user.id)
     set_user_persona(user_id, persona)
     
-    if persona == "hacker":
-        response_msg = "컨텍스트 스위칭 완료. 해커 모드로 재부팅되었다. 쓸데없는 소리 하지마라."
-    elif persona == "jammini":
-        response_msg = "ㅋㅋ 잼미니 모드 장착 완료! ㄹㅇ 꿀잼각이네. 무슨 일인데?"
-        
-    await update.message.reply_text(response_msg)
+    mode_name = personas_data[persona]["name"]
+    await update.message.reply_text(f"컨텍스트 스위칭 완료. [{mode_name}] 모드로 재부팅되었다.")
 
 async def cmd_hacker(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await switch_persona(update, context, "hacker")
@@ -157,14 +156,7 @@ async def cmd_jammini(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 async def cmd_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """인격 선택 버튼을 다시 띄워주는 명령어"""
-    keyboard = [
-        [
-            InlineKeyboardButton("해커 (Hacker)", callback_data='mode_hacker'),
-            InlineKeyboardButton("잼미니 (Jammini)", callback_data='mode_jammini')
-        ]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("변경할 인격을 선택해라:", reply_markup=reply_markup)
+    await update.message.reply_text("변경할 인격을 선택해라:", reply_markup=get_persona_keyboard())
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """인라인 버튼 클릭 처리"""
@@ -174,12 +166,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     user_id = str(query.from_user.id)
     data = query.data
     
-    if data == 'mode_hacker':
-        set_user_persona(user_id, "hacker")
-        await query.edit_message_text(text="컨텍스트 스위칭 완료. 해커 모드로 재부팅되었다. 쓸데없는 소리 하지마라.")
-    elif data == 'mode_jammini':
-        set_user_persona(user_id, "jammini")
-        await query.edit_message_text(text="ㅋㅋ 잼미니 모드 장착 완료! ㄹㅇ 꿀잼각이네. 무슨 일인데?")
+    if data.startswith('mode_'):
+        pid = data.split('_')[1]
+        if pid in personas_data:
+            set_user_persona(user_id, pid)
+            mode_name = personas_data[pid]["name"]
+            await query.edit_message_text(text=f"[{mode_name}] 모드 장착 완료! 대화를 시작해봐.")
+        else:
+            await query.edit_message_text(text="오류: 알 수 없는 인격입니다.")
 
 async def reset_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/reset 명령어: 탄 냄비 닦아내듯 메모리 초기화"""
