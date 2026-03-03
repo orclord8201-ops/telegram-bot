@@ -56,8 +56,8 @@ def save_settings(data):
 
 def get_user_persona(user_id):
     settings = load_settings()
-    # 기본값은 해커
-    return settings.get(str(user_id), {}).get("persona", "hacker")
+    # 기본값은 자비스(Jarvis)
+    return settings.get(str(user_id), {}).get("persona", "jarvis")
 
 def set_user_persona(user_id, persona):
     settings = load_settings()
@@ -154,6 +154,9 @@ async def cmd_hacker(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 async def cmd_jammini(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await switch_persona(update, context, "jammini")
 
+async def cmd_jarvis(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await switch_persona(update, context, "jarvis")
+
 async def cmd_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """인격 선택 버튼을 다시 띄워주는 명령어"""
     await update.message.reply_text("변경할 인격을 선택해라:", reply_markup=get_persona_keyboard())
@@ -231,6 +234,7 @@ def main() -> None:
     # 인격 전환 명령어
     application.add_handler(CommandHandler("hacker", cmd_hacker))
     application.add_handler(CommandHandler("jammini", cmd_jammini))
+    application.add_handler(CommandHandler("jarvis", cmd_jarvis))
     
     # 버튼 콜백 핸들러
     application.add_handler(CallbackQueryHandler(button_callback))
