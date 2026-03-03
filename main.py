@@ -2,8 +2,8 @@ import os
 import json
 import asyncio
 import google.generativeai as genai
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from dotenv import load_dotenv
 
 import traceback
@@ -119,14 +119,23 @@ def save_history(user_id, user_msg, model_msg):
 
 # 4. 요리 과정 (명령어 핸들러)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """봇 시작 시 인사말 (현재 모드 안내)"""
+    """봇 시작 시 인사말 (현재 모드 안내) 및 인격 선택 버튼"""
     user_id = str(update.effective_user.id)
     user_name = update.effective_user.first_name
     current_mode = get_user_persona(user_id)
     
     msg = f"시스템 접속 완료. {user_name}, 현재 모드는 [{current_mode.upper()}]이다.\n"
-    msg += "모드를 바꾸려면 /hacker 또는 /jammini 를 입력해라."
-    await update.message.reply_text(msg)
+    msg += "아래 버튼을 누르거나 /mode 명령어를 써서 인격을 변경할 수 있다."
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("해커 (Hacker)", callback_data='mode_hacker'),
+            InlineKeyboardButton("잼미니 (Jammini)", callback_data='mode_jammini')
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(msg, reply_markup=reply_markup)
 
 async def switch_persona(update: Update, context: ContextTypes.DEFAULT_TYPE, persona: str) -> None:
     """인격 전환 핸들러 공통 로직"""
@@ -145,6 +154,32 @@ async def cmd_hacker(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 async def cmd_jammini(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await switch_persona(update, context, "jammini")
+
+async def cmd_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """인격 선택 버튼을 다시 띄워주는 명령어"""
+    keyboard = [
+        [
+            InlineKeyboardButton("해커 (Hacker)", callback_data='mode_hacker'),
+            InlineKeyboardButton("잼미니 (Jammini)", callback_data='mode_jammini')
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("변경할 인격을 선택해라:", reply_markup=reply_markup)
+
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """인라인 버튼 클릭 처리"""
+    query = update.callback_query
+    await query.answer() # 로딩 표시 제거
+    
+    user_id = str(query.from_user.id)
+    data = query.data
+    
+    if data == 'mode_hacker':
+        set_user_persona(user_id, "hacker")
+        await query.edit_message_text(text="컨텍스트 스위칭 완료. 해커 모드로 재부팅되었다. 쓸데없는 소리 하지마라.")
+    elif data == 'mode_jammini':
+        set_user_persona(user_id, "jammini")
+        await query.edit_message_text(text="ㅋㅋ 잼미니 모드 장착 완료! ㄹㅇ 꿀잼각이네. 무슨 일인데?")
 
 async def reset_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/reset 명령어: 탄 냄비 닦아내듯 메모리 초기화"""
@@ -197,10 +232,14 @@ def main() -> None:
     # 일반 명령어
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("reset", reset_history))
+    application.add_handler(CommandHandler("mode", cmd_mode))
     
     # 인격 전환 명령어
     application.add_handler(CommandHandler("hacker", cmd_hacker))
     application.add_handler(CommandHandler("jammini", cmd_jammini))
+    
+    # 버튼 콜백 핸들러
+    application.add_handler(CallbackQueryHandler(button_callback))
     
     # 메시지 수신
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
