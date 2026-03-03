@@ -32,7 +32,7 @@ personas_data = load_personas()
 models = {}
 for pid, pdata in personas_data.items():
     models[pid] = genai.GenerativeModel(
-        model_name='gemini-3-flash-preview',
+        model_name='gemini-1.5-flash',
         system_instruction=pdata["instruction"]
     )
 
@@ -83,20 +83,21 @@ def load_history(user_id):
     with open(path, 'r', encoding='utf-8') as f:
         for line in f:
             if line.startswith("### User:"):
-                if current_role:
+                if current_role and current_parts:
                     history.append({"role": current_role, "parts": ["\n".join(current_parts).strip()]})
                 current_role = "user"
                 current_parts = []
             elif line.startswith("### Model:"):
-                if current_role:
+                if current_role and current_parts:
                     history.append({"role": current_role, "parts": ["\n".join(current_parts).strip()]})
                 current_role = "model"
                 current_parts = []
             else:
                 if current_role:
-                    current_parts.append(line.strip())
+                    current_parts.append(line.rstrip())
         
-        if current_role:
+        # 마지막 항목 추가
+        if current_role and current_parts:
             history.append({"role": current_role, "parts": ["\n".join(current_parts).strip()]})
             
     return history
@@ -163,6 +164,7 @@ async def cmd_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """인라인 버튼 클릭 처리"""
+    print(f"DEBUG: Button clicked by {update.callback_query.from_user.first_name}")
     query = update.callback_query
     await query.answer() # 로딩 표시 제거
     
@@ -191,6 +193,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user_id = str(update.effective_user.id)
     user_name = update.effective_user.first_name
     user_message = update.message.text
+    print(f"DEBUG: Message received from {user_name}: {user_message}")
     
     # 조리 중(타이핑) 표시
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
@@ -206,15 +209,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # 개인화 정보 주입
         personal_context = f"[System Alert: 대화 상대방의 이름은 {user_name}이다.]\n"
         
+        print(f"DEBUG: Calling Gemini API (Persona: {current_persona})...")
         # 과거 대화 맥락을 넣고 API 끓이기
         chat_session = current_model.start_chat(history=history)
         
         # 비동기(async) 호출
         response = await chat_session.send_message_async(personal_context + user_message)
         reply_text = response.text
+        print(f"DEBUG: Response generated successfully.")
         
         # 성공적으로 요리가 끝났으면 DB(Markdown)에 새로운 대화 내역 저장
         save_history(user_id, user_message, reply_text)
+        print(f"DEBUG: History saved to {get_log_path(user_id)}")
         
     except Exception as e:
         traceback.print_exc()
