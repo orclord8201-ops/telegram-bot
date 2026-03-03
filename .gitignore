@@ -18,3 +18,5 @@ database.json
 .vscode/
 .idea/
 .DS_Store
+# Logs
+logs/
