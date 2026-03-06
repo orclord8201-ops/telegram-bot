@@ -39,6 +39,22 @@ for pid, pdata in personas_data.items():
 LOG_DIR = "logs"
 os.makedirs(LOG_DIR, exist_ok=True)
 SETTINGS_FILE = "user_settings.json"
+MEMORY_FILE = "memory_db.json"
+
+# --- 메모리 DB (활성 컨텍스트) ---
+def load_memory_db():
+    if not os.path.exists(MEMORY_FILE):
+        return {}
+    with open(MEMORY_FILE, 'r', encoding='utf-8') as f:
+        try:
+            return json.load(f)
+        except json.JSONDecodeError:
+            return {}
+
+def save_memory_db(db):
+    with open(MEMORY_FILE, 'w', encoding='utf-8') as f:
+        json.dump(db, f, ensure_ascii=False, indent=4)
+
 
 # --- 설정 관리 (JSON 기반) ---
 def load_settings():
@@ -67,43 +83,31 @@ def set_user_persona(user_id, persona):
     settings[uid]["persona"] = persona
     save_settings(settings)
 
-# --- 식재료 보관함 (Markdown DB 읽기/쓰기) ---
-def get_log_path(user_id):
-    return os.path.join(LOG_DIR, f"{user_id}.md")
+# --- 식재료 보관함 (이중 로깅) ---
+def get_log_path(user_id, user_name):
+    # 영구 기록用の 마크다운 파일 경로 (logs/UserID_Name.md)
+    safe_name = "".join(c for c in user_name if c.isalnum() or c in " _-")
+    return os.path.join(LOG_DIR, f"{user_id}_{safe_name}.md")
 
 def load_history(user_id):
-    path = get_log_path(user_id)
-    if not os.path.exists(path):
-        return []
-    
-    history = []
-    current_role = None
-    current_parts = []
-    
-    with open(path, 'r', encoding='utf-8') as f:
-        for line in f:
-            if line.startswith("### User:"):
-                if current_role and current_parts:
-                    history.append({"role": current_role, "parts": ["\n".join(current_parts).strip()]})
-                current_role = "user"
-                current_parts = []
-            elif line.startswith("### Model:"):
-                if current_role and current_parts:
-                    history.append({"role": current_role, "parts": ["\n".join(current_parts).strip()]})
-                current_role = "model"
-                current_parts = []
-            else:
-                if current_role:
-                    current_parts.append(line.rstrip())
-        
-        # 마지막 항목 추가
-        if current_role and current_parts:
-            history.append({"role": current_role, "parts": ["\n".join(current_parts).strip()]})
-            
-    return history
+    """API에 보낼 실제 대화 맥락을 memory_db에서 로드"""
+    db = load_memory_db()
+    return db.get(str(user_id), [])
 
-def save_history(user_id, user_msg, model_msg):
-    path = get_log_path(user_id)
+def save_history(user_id, user_name, user_msg, model_msg):
+    """메모리 DB에 맥락 업데이트 및 Markdown 로그에 보관용 기록 추가"""
+    uid_str = str(user_id)
+    
+    # 1. 활성 메모리(memory_db) 업데이트
+    db = load_memory_db()
+    if uid_str not in db:
+        db[uid_str] = []
+    db[uid_str].append({"role": "user", "parts": [user_msg]})
+    db[uid_str].append({"role": "model", "parts": [model_msg]})
+    save_memory_db(db)
+    
+    # 2. 영구 보관용 마크다운(logs/) 업데이트
+    path = get_log_path(user_id, user_name)
     with open(path, 'a', encoding='utf-8') as f:
         f.write(f"### User:\n{user_msg}\n\n")
         f.write(f"### Model:\n{model_msg}\n\n")
@@ -183,9 +187,19 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def reset_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/reset 명령어: 탄 냄비 닦아내듯 메모리 초기화"""
     user_id = str(update.effective_user.id)
-    path = get_log_path(user_id)
-    if os.path.exists(path):
-        os.remove(path)
+    user_name = update.effective_user.first_name
+    
+    # 1. 활성 메모리 삭제
+    db = load_memory_db()
+    if user_id in db:
+        del db[user_id]
+        save_memory_db(db)
+        
+    # 2. Markdown 로그에 절취선 표시 (삭제하지 않음)
+    path = get_log_path(user_id, user_name)
+    with open(path, 'a', encoding='utf-8') as f:
+        f.write("\n--- [MEMORY RESET] ---\n\n")
+        
     await update.message.reply_text("메모리 덤프 완료. 쓰레기 데이터는 날렸다. 다시 말해.")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -218,9 +232,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         reply_text = response.text
         print(f"DEBUG: Response generated successfully.")
         
-        # 성공적으로 요리가 끝났으면 DB(Markdown)에 새로운 대화 내역 저장
-        save_history(user_id, user_message, reply_text)
-        print(f"DEBUG: History saved to {get_log_path(user_id)}")
+        # 성공적으로 요리가 끝났으면 DB 및 Markdown에 새로운 대화 내역 저장
+        save_history(user_id, user_name, user_message, reply_text)
+        print(f"DEBUG: History saved to Memory DB and {get_log_path(user_id, user_name)}")
         
     except Exception as e:
         traceback.print_exc()

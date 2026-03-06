@@ -18,5 +18,6 @@ database.json
 .vscode/
 .idea/
 .DS_Store
-# Logs
+# Logs & Local Data
 logs/
+memory_db.json
