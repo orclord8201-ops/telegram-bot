@@ -21,3 +21,4 @@ database.json
 # Logs & Local Data
 logs/
 memory_db.json
+usage_db.json

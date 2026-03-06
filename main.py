@@ -40,6 +40,37 @@ LOG_DIR = "logs"
 os.makedirs(LOG_DIR, exist_ok=True)
 SETTINGS_FILE = "user_settings.json"
 MEMORY_FILE = "memory_db.json"
+USAGE_FILE = "usage_db.json"
+
+import datetime
+
+# --- 사용량 추적 DB ---
+def load_usage_db():
+    if not os.path.exists(USAGE_FILE):
+        return {}
+    with open(USAGE_FILE, 'r', encoding='utf-8') as f:
+        try:
+            return json.load(f)
+        except json.JSONDecodeError:
+            return {}
+
+def save_usage_db(db):
+    with open(USAGE_FILE, 'w', encoding='utf-8') as f:
+        json.dump(db, f, ensure_ascii=False, indent=4)
+
+def record_usage(user_id, tokens):
+    db = load_usage_db()
+    uid = str(user_id)
+    today = datetime.date.today().isoformat()
+    
+    if uid not in db:
+        db[uid] = {}
+    if today not in db[uid]:
+        db[uid][today] = {"requests": 0, "tokens": 0}
+        
+    db[uid][today]["requests"] += 1
+    db[uid][today]["tokens"] += tokens
+    save_usage_db(db)
 
 # --- 메모리 DB (활성 컨텍스트) ---
 def load_memory_db():
@@ -202,6 +233,23 @@ async def reset_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         
     await update.message.reply_text("메모리 덤프 완료. 쓰레기 데이터는 날렸다. 다시 말해.")
 
+async def cmd_usage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/usage 명령어: 오늘 사용량 확인"""
+    user_id = str(update.effective_user.id)
+    today = datetime.date.today().isoformat()
+    db = load_usage_db()
+    
+    user_stats = db.get(user_id, {}).get(today, {"requests": 0, "tokens": 0})
+    reqs = user_stats["requests"]
+    toks = user_stats["tokens"]
+    
+    msg = f"📊 **오늘의 대화 사용량 ({today})**\n\n"
+    msg += f"- 보낸 대화 횟수: {reqs}회\n"
+    msg += f"- 사용된 총 토큰: {toks:,}개\n\n"
+    msg += "💡 *안심하세요! 현재 적용된 gemini-2.5-flash 모델은 하루 최대 1,500회의 대화를 무료로 제공합니다. 아직 매우 넉넉합니다.*"
+    
+    await update.message.reply_text(msg, parse_mode='Markdown')
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """메인 조리 과정: 대화 처리 및 API 호출"""
     user_id = str(update.effective_user.id)
@@ -230,7 +278,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # 비동기(async) 호출
         response = await chat_session.send_message_async(personal_context + user_message)
         reply_text = response.text
-        print(f"DEBUG: Response generated successfully.")
+        
+        # 사용량 기록
+        total_tokens = response.usage_metadata.total_token_count
+        record_usage(user_id, total_tokens)
+        
+        print(f"DEBUG: Response generated successfully. Tokens used: {total_tokens}")
         
         # 성공적으로 요리가 끝났으면 DB 및 Markdown에 새로운 대화 내역 저장
         save_history(user_id, user_name, user_message, reply_text)
@@ -250,6 +303,7 @@ def main() -> None:
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("reset", reset_history))
     application.add_handler(CommandHandler("mode", cmd_mode))
+    application.add_handler(CommandHandler("usage", cmd_usage))
     
     # 인격 전환 명령어
     application.add_handler(CommandHandler("hacker", cmd_hacker))
